@@ -1,10 +1,18 @@
 # %%
+
+import argparse
+import cProfile
+import json
+import multiprocessing
 import os
-from typing import BinaryIO
-import regex as re
-from tqdm import tqdm
-from loguru import logger
+import pickle
 from collections import defaultdict
+from pathlib import Path
+from typing import BinaryIO
+
+import regex as re
+from loguru import logger
+from tqdm import tqdm
 
 
 def find_chunk_boundaries(
@@ -63,9 +71,6 @@ def update_pre_tokens(pre_tokens: dict[bytes, int], chunk_strings: list[str]):
             byte_string = tuple(bytes([b]) for b in word[0].encode("utf-8"))
             pre_tokens[byte_string] += 1
     return pre_tokens
-
-
-import multiprocessing
 
 
 def process_chunk(i, boundaries, input_path, special_tokens_pattern):
@@ -181,7 +186,7 @@ def merge_most_frequent_pair(pre_tokens, pair, pair_freqs, pre_token_pairs):
 
 
 def train_bpe(
-    input_path: str, vocab_size: int, special_tokens: list[str]
+    input_path: str, vocab_size: int, special_tokens: list[str],save_dir:str,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """_summary_
 
@@ -193,54 +198,58 @@ def train_bpe(
     Returns:
         dict[int,bytes],list[tuple[bytes,bytes]]: _description_
     """
-
+    os.makedirs(save_dir,exist_ok=True)
     pre_tokens = pre_tokenize(
         input_path,
         special_tokens_pattern="|".join([re.escape(t) for t in special_tokens]),
     )
-    pair_freqs, pre_token_pairs = compute_all_pair_freqs(pre_tokens)
+    with cProfile.Profile() as pr:
+        pair_freqs, pre_token_pairs = compute_all_pair_freqs(pre_tokens)
 
-    vocab = {0: b"<|endoftext|>"} | {i + 1: bytes([i]) for i in range(256)}
-    next_vocab_index = 257
-    merges = []
-    for vocab_index in tqdm(
-        range(next_vocab_index, vocab_size), desc="Increasing vocab size"
-    ):
+        vocab = {0: b"<|endoftext|>"} | {i + 1: bytes([i]) for i in range(256)}
+        next_vocab_index = 257
+        merges = []
+        for vocab_index in tqdm(
+            range(next_vocab_index, vocab_size), desc="Increasing vocab size"
+        ):
 
-        most_frequent_pair = max(
-            pair_freqs, key=lambda x: (pair_freqs[x], x)
-        )  # lexico order with freq first then pair content
-        logger.info(f"Freq of most frequent = {pair_freqs[most_frequent_pair]}")
-        vocab |= {vocab_index: most_frequent_pair[0] + most_frequent_pair[1]}
-        merges.append(most_frequent_pair)
-        pre_tokens, pre_token_pairs = merge_most_frequent_pair(
-            pre_tokens=pre_tokens,
-            pair=most_frequent_pair,
-            pair_freqs=pair_freqs,
-            pre_token_pairs=pre_token_pairs,
-        )
+            most_frequent_pair = max(
+                pair_freqs, key=lambda x: (pair_freqs[x], x)
+            )  # lexico order with freq first then pair content
+            # logger.info(f"Freq of most frequent = {pair_freqs[most_frequent_pair]}")
+            vocab |= {vocab_index: most_frequent_pair[0] + most_frequent_pair[1]}
+            merges.append(most_frequent_pair)
+            pre_tokens, pre_token_pairs = merge_most_frequent_pair(
+                pre_tokens=pre_tokens,
+                pair=most_frequent_pair,
+                pair_freqs=pair_freqs,
+                pre_token_pairs=pre_token_pairs,
+            )
+            pair_freqs[most_frequent_pair] = 0
+            with open(save_dir +"/vocab.pkl", "wb") as f:
+                pickle.dump(vocab, f)
+            with open(save_dir + "/merges.pkl", "wb") as f:
+                pickle.dump(merges, f)
+            with open(save_dir + "/vocab.json", "w") as f:
+                json.dump({i: str(v) for i, v in vocab.items()}, f, indent=4)
+            with open(save_dir + "/merges.json", "w") as f:
+                json.dump([[str(m) for m in merge] for merge in merges], f, indent=4)
+        pr.print_stats("cumtime")
     return vocab, merges
 
 
 # %%
-## Usage
-import pickle
-import json
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--text",type=str)
+parser.add_argument("--vocab-size",type=int)
+args = parser.parse_args()
 
 if __name__ == "__main__":
-    input_path = "../data/TinyStoriesV2-GPT4-valid.txt"
+    # text = "TinyStoriesV2-GPT4"
+    input_path = Path(__file__).parent.parent / f"data/{args.text}-train.txt"
     special_tokens = ["<|endoftext|>"]
-    vocab_size = 10000
+    vocab_size = args.vocab_size
     vocab, merges = train_bpe(
-        input_path=input_path, vocab_size=vocab_size, special_tokens=special_tokens
+        input_path=input_path, vocab_size=vocab_size, special_tokens=special_tokens,save_dir=args.text,
     )
-    with open("vocab.pkl", "wb") as f:
-        pickle.dump(vocab, f)
-    with open("merges.pkl", "wb") as f:
-        pickle.dump(merges, f)
-    with open("vocab.json", "w") as f:
-        json.dump({i: str(v) for i, v in vocab.items()}, f, indent=4)
-    with open("merges.json", "w") as f:
-        json.dump([[str(m) for m in merge] for merge in merges], f, indent=4)
-# %%
