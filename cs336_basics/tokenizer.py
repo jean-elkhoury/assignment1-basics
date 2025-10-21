@@ -3,7 +3,7 @@ import pickle
 from collections.abc import Iterable, Iterator
 
 import regex as re
-import tqdm
+from tqdm import tqdm
 
 
 class Tokenizer:
