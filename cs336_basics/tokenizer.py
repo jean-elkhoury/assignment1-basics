@@ -3,6 +3,7 @@ import pickle
 from collections.abc import Iterable, Iterator
 
 import regex as re
+import tqdm
 
 
 class Tokenizer:
@@ -49,7 +50,7 @@ class Tokenizer:
             strings = [text]
             special_token_occurrences = []
 
-        for i, string in enumerate(strings):
+        for i, string in tqdm(enumerate(strings), desc="Listing strings delimited by special tokens"):
             PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
             for word in re.finditer(pattern=PAT, string=string):
                 pre_token = tuple(bytes([b]) for b in word[0].encode("utf-8"))
